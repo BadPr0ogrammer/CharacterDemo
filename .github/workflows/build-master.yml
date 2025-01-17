@@ -1,0 +1,371 @@
+name: BuildGame
+
+on:
+  push:
+    branches: [ "master", "main" ]
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------------------------
+  set_version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore tools
+        run: dotnet tool restore
+
+      - name: Get version
+        run: dotnet tool run ezpipeline git-height-version -- -b 0.0.1 -v BUILD_VERSION
+
+      - name: Get android version
+        run: dotnet tool run ezpipeline git-height-version -- -v ANDROID_VERSION
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: v${{ env.BUILD_VERSION }}
+          tag_name: v${{ env.BUILD_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Check for Secret PLAY_KEYSTORE
+        id: play-keystore-check
+        run: |
+          if [ "${{ secrets.PLAY_KEYSTORE }}" != '' ]; then
+            echo "HAS_PLAY_KEYSTORE=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "HAS_PLAY_KEYSTORE=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for STEAM_USERNAME
+        id: steam-check
+        run: |
+          if [ "${{ secrets.STEAM_USERNAME }}" != '' ]; then
+            echo "HAS_STEAM_USERNAME=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "HAS_STEAM_USERNAME=false" >> "$GITHUB_OUTPUT"
+          fi
+
+    outputs:
+      BUILD_VERSION: ${{ env.BUILD_VERSION }}
+      ANDROID_VERSION: ${{ env.ANDROID_VERSION }}
+      HAS_PLAY_KEYSTORE: ${{ steps.play-keystore-check.outputs.HAS_PLAY_KEYSTORE }}
+      HAS_STEAM_USERNAME: ${{ steps.steam-check.outputs.HAS_STEAM_USERNAME }}
+
+  # ---------------------------------------------------------------------------------------
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore tools
+        run: dotnet tool restore
+
+      - name: Test in Debug configuration
+        working-directory: ./CharacterDemo.Tests
+        run: dotnet test --configuration Debug --verbosity normal
+
+      - name: Test in Release configuration
+        working-directory: ./CharacterDemo.Tests
+        run: dotnet test --configuration Release --verbosity normal
+
+  # ---------------------------------------------------------------------------------------
+  build_desktop:
+    needs: [set_version, tests]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-13, windows-latest, ubuntu-latest]
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+        fetch-depth: 1
+
+    - name: Evaluate target runtime
+      shell: bash
+      run: |
+        echo "OS: $OSTYPE"
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+          echo "RUNTIME_ID: osx-x64"
+          echo "RUNTIME_ID=osx-x64" >> $GITHUB_ENV
+        elif [[ "$OSTYPE" == "linux"* ]]; then
+          echo "RUNTIME_ID: linux-x64"
+          echo "RUNTIME_ID=linux-x64" >> $GITHUB_ENV
+        elif [[ "$OSTYPE" == "msys"* ]]; then
+          echo "RUNTIME_ID: win-x64"
+          echo "RUNTIME_ID=win-x64" >> $GITHUB_ENV
+        else
+          echo "Unrecognized OS type $OSTYPE"
+          exit 1
+        fi
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: 8.0.x
+
+    - name: Restore tools
+      run: dotnet tool restore
+
+    - name: Restore dependencies
+      working-directory: ./CharacterDemo.Desktop
+      run: dotnet restore
+
+    - name: Dotnet Publish
+      working-directory: ./CharacterDemo.Desktop
+      run: dotnet publish -f net8.0 -c Release --runtime ${{ env.RUNTIME_ID }} --self-contained true -p:Version=${{ needs.set_version.outputs.BUILD_VERSION }}
+
+    - name: Copy runtime dlls
+      if: ${{ env.RUNTIME_ID == 'win-x64' }}
+      run: |
+        copy "C:/Windows/System32/MSVCP140.dll" "CharacterDemo.Desktop/bin/Release/net8.0/${{ env.RUNTIME_ID }}/publish/"
+        copy "C:/Windows/System32/VCRUNTIME140.dll" "CharacterDemo.Desktop/bin/Release/net8.0/${{ env.RUNTIME_ID }}/publish/"
+        copy "C:/Windows/System32/VCRUNTIME140_1.dll" "CharacterDemo.Desktop/bin/Release/net8.0/${{ env.RUNTIME_ID }}/publish/"
+        copy "C:/Windows/System32/D3DCOMPILER_47.dll" "CharacterDemo.Desktop/bin/Release/net8.0/${{ env.RUNTIME_ID }}/publish/"
+
+    - name: Zip Package
+      run: dotnet tool run ezpipeline -- zip -i CharacterDemo.Desktop/bin/Release/net8.0/${{ env.RUNTIME_ID }}/publish/ -o CharacterDemo.${{ env.RUNTIME_ID }}.zip
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          ./CharacterDemo.${{ env.RUNTIME_ID }}.zip
+        name: v${{ needs.set_version.outputs.BUILD_VERSION }}
+        tag_name: v${{ needs.set_version.outputs.BUILD_VERSION }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    # ------------ itch.io ------------
+    - name: Release to itch.io ${{ vars.ITCH_PROJECT }}
+      env:
+        BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+      if: ${{ env.BUTLER_API_KEY != '' && vars.ITCH_PROJECT != '' }}
+      run: |
+        dotnet tool run ezpipeline -- fetch-tool --name Butler -o tools/itch
+        tools/itch/butler push CharacterDemo.Desktop/bin/Release/net8.0/${{ env.RUNTIME_ID }}/publish/ ${{ vars.ITCH_PROJECT }}:${{ env.RUNTIME_ID }}
+      shell: bash
+
+  # ---------------------------------------------------------------------------------------
+  build_android:
+    needs: [set_version, tests]
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+        fetch-depth: 1
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: 8.0.x
+
+    - name: Restore tools
+      run: dotnet tool restore
+
+    - name: Install Workloads
+      run: dotnet workload install android 
+
+    - name: Restore dependencies
+      working-directory: ./CharacterDemo.Android
+      run: dotnet restore
+
+    - name: Install android-sdk
+      shell: bash
+      run: |
+        sudo apt-get install -y wget tar android-sdk unzip tree
+        echo $ANDROID_HOME
+        sudo chmod -R a+rw $ANDROID_HOME
+
+    - name: Fetch AndroidSDKManager
+      run: |
+        dotnet tool run ezpipeline fetch-tool -n AndroidSDKManager --output $ANDROID_HOME --path --version 9123335
+        yes | $ANDROID_HOME/cmdline-tools/bin/sdkmanager --licenses --sdk_root=$ANDROID_HOME
+
+    - name: 'Print Java version'
+      run: javac -version
+
+    - name: Install Android SDK and Platforms
+      run: $ANDROID_HOME/cmdline-tools/bin/sdkmanager "platform-tools" "platforms;android-33" --sdk_root=$ANDROID_HOME
+
+    - name: Decode Keystore
+      id: decode_keystore
+      if: ${{ needs.set_version.outputs.HAS_PLAY_KEYSTORE == 'true' }}
+      uses: timheuer/base64-to-file@v1
+      with:
+        fileDir: '${{ github.workspace }}/CharacterDemo.Android'
+        fileName: 'googleplay.jks'
+        encodedString: ${{ secrets.PLAY_KEYSTORE }}
+
+    - name: Extract ApplicationId from CharacterDemo.Android.csproj
+      working-directory: ./CharacterDemo.Android
+      run: |
+        dotnet tool run ezpipeline get-msbuild-property -i CharacterDemo.Android.csproj -p ApplicationId -v ANDROID_PACKAGENAME
+    
+    - name: Dotnet Publish
+      working-directory: ./CharacterDemo.Android
+      run: |
+        if [ -n "${{ secrets.PLAY_KEYSTORE }}" ]; then
+          echo "Secret PLAY_KEYSTORE is defined. Building and signing the aab file."
+          dotnet publish -f net8.0-android -c Release --no-restore -p:ApplicationId=${{ env.ANDROID_PACKAGENAME }} -p:ApplicationDisplayVersion=${{ needs.set_version.outputs.BUILD_VERSION }} -p:ApplicationVersion=${{ needs.set_version.outputs.ANDROID_VERSION }} -p:AndroidSdkDirectory=$ANDROID_HOME -p:Version=${{ needs.set_version.outputs.BUILD_VERSION }}  /p:AndroidKeyStore=true /p:AndroidSigningKeyStore=googleplay.jks /p:AndroidSigningKeyAlias=${{secrets.PLAY_KEYSTORE_ALIAS}} /p:AndroidSigningKeyPass="${{ secrets.PLAY_KEYSTORE_PASS }}" /p:AndroidSigningStorePass="${{ secrets.PLAY_KEYSTORE_PASS }}"
+        else
+          echo "Secret PLAY_KEYSTORE is not defined. Building with no signature."
+          dotnet publish -f net8.0-android -c Release --no-restore -p:ApplicationId=${{ env.ANDROID_PACKAGENAME }} -p:ApplicationDisplayVersion=${{ needs.set_version.outputs.BUILD_VERSION }} -p:ApplicationVersion=${{ needs.set_version.outputs.ANDROID_VERSION }} -p:AndroidSdkDirectory=$ANDROID_HOME -p:Version=${{ needs.set_version.outputs.BUILD_VERSION }}
+        fi
+
+    - name: Find APK
+      run: |
+        dotnet tool run ezpipeline resolve-path -i ./CharacterDemo.Android/bin/Release/**/*-Signed.apk -v APK_PATH
+        dotnet tool run ezpipeline resolve-path -i ./CharacterDemo.Android/bin/Release/**/*-Signed.aab -v AAB_PATH
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          ${{ env.APK_PATH }}
+          ${{ env.AAB_PATH }}
+        name: v${{ needs.set_version.outputs.BUILD_VERSION }}
+        tag_name: v${{ needs.set_version.outputs.BUILD_VERSION }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Release to itch.io ${{ vars.ITCH_PROJECT }}
+      env:
+        BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+      if: ${{ env.BUTLER_API_KEY != '' && vars.ITCH_PROJECT != '' }}
+      run: |
+        dotnet tool run ezpipeline -- fetch-tool --name Butler -o tools/itch
+        tools/itch/butler push ${{ env.APK_PATH }} ${{ vars.ITCH_PROJECT }}:android
+      shell: bash
+
+    - uses: r0adkll/upload-google-play@v1.1.3
+      name: Upload Android Artifact to Play Console
+      env:
+        PLAYSTORE_SERVICE_ACC: ${{ secrets.PLAYSTORE_SERVICE_ACC }}
+      if: ${{ env.PLAYSTORE_SERVICE_ACC != '' }}
+      with:
+        serviceAccountJsonPlainText: ${{ secrets.PLAYSTORE_SERVICE_ACC }}
+        packageName: ${{ env.ANDROID_PACKAGENAME }}
+        releaseFiles: ${{ env.AAB_PATH }}
+        track: internal
+  # ---------------------------------------------------------------------------------------
+  build_uwp:
+    needs: [set_version, tests]
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+        fetch-depth: 1
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: 8.0.x
+
+    - name: Add msbuild to PATH
+      uses: microsoft/setup-msbuild@v1.1
+
+    - name: Restore tools
+      run: dotnet tool restore
+
+    - name: Restore application
+      working-directory: ./CharacterDemo.UWP
+      run: msbuild CharacterDemo.UWP.csproj /t:Restore /p:Configuration=Release
+   
+    - name: Patch manifest version
+      working-directory: ./CharacterDemo.UWP
+      run: dotnet tool run ezpipeline -- set-xml -i Package.appxmanifest -p default:Package/default:Identity -a Version -v ${{ needs.set_version.outputs.BUILD_VERSION }}.0
+
+    - name: Dotnet Publish
+      working-directory: ./CharacterDemo.UWP
+      run: msbuild CharacterDemo.UWP.csproj /p:AppxPackageDir=appxupload /p:AppxBundle=Always /p:AppxBundlePlatforms="x64" /p:Platform=x64 /p:AppxPackageSigningEnabled=false /p:UapAppxPackageBuildMode=StoreUpload /p:Configuration=Release /p:Version=${{ needs.set_version.outputs.BUILD_VERSION }}
+
+    - name: Zip Package
+      run: dotnet tool run ezpipeline -- zip -i CharacterDemo.UWP/appxupload/CharacterDemo.UWP_${{ needs.set_version.outputs.BUILD_VERSION }}.0_Test -o CharacterDemo.UWP/appxupload/CharacterDemo.UWP.x64.zip
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+           CharacterDemo.UWP/appxupload/CharacterDemo.UWP_${{ needs.set_version.outputs.BUILD_VERSION }}.0_x64_bundle.appxupload
+           CharacterDemo.UWP/appxupload/CharacterDemo.UWP.x64.zip
+        name: v${{ needs.set_version.outputs.BUILD_VERSION }}
+        tag_name: v${{ needs.set_version.outputs.BUILD_VERSION }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ------------ Steam ------------
+  publish_to_steam:
+    needs: [set_version, build_desktop]
+    runs-on: ubuntu-latest
+    if: needs.set_version.outputs.HAS_STEAM_USERNAME == 'true'
+    steps:
+    - name: Download Windows Build
+      uses: robinraju/release-downloader@v1
+      with:
+        repository: ${{ github.repository }}
+        tag: v${{ needs.set_version.outputs.BUILD_VERSION }}
+        fileName: 'CharacterDemo.win-x64.zip'
+        token: ${{ secrets.GITHUB_TOKEN }}
+        out-file-path: ./StandaloneWindows64
+        extract: true
+
+    - name: Download Linux Build
+      uses: robinraju/release-downloader@v1
+      with:
+        repository: ${{ github.repository }}
+        tag: v${{ needs.set_version.outputs.BUILD_VERSION }}
+        fileName: 'CharacterDemo.linux-x64.zip'
+        token: ${{ secrets.GITHUB_TOKEN }}
+        out-file-path: ./StandaloneLinux64
+        extract: true
+
+    - name: Download Mac Build
+      uses: robinraju/release-downloader@v1
+      with:
+        repository: ${{ github.repository }}
+        tag: v${{ needs.set_version.outputs.BUILD_VERSION }}
+        fileName: 'CharacterDemo.osx-x64.zip'
+        token: ${{ secrets.GITHUB_TOKEN }}
+        out-file-path: ./StandaloneMac64
+        extract: true
+
+    - name: Delete CharacterDemo.*-x64.zip
+      run: |
+        ROOT_FOLDER="./"
+        PATTERN="*CharacterDemo.*-x64.zip"
+        find "$ROOT_FOLDER" -type f -name "$PATTERN" -exec rm -f {} +
+
+    - uses: game-ci/steam-deploy@v3
+      env:
+        STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+      name: Steam - Publish
+      with:
+        username: ${{ secrets.STEAM_USERNAME }}   
+        configVdf: ${{ secrets.STEAM_CONFIG_VDF }}       
+        appId: ${{ secrets.STEAM_APPID }}       
+        buildDescription: v${{ needs.set_version.outputs.BUILD_VERSION }}
+        rootPath: ./
+        depot1Path: StandaloneWindows64
+        depot2Path: StandaloneLinux64
+        depot3Path: StandaloneMac64
+        releaseBranch: prerelease
