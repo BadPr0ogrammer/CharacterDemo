@@ -58,8 +58,14 @@ namespace CharacterDemo
             _scene.Ptr.LoadXML("Scenes/Sample.xml");
 
             _yard = _scene.Ptr.CreateChild();
-            _yard.CreateComponent<PrefabReference>()
-                .SetPrefab(Context.ResourceCache.GetResource<PrefabResource>("Models/scrapyard/junkdisplay.FBX.d/Prefab.prefab"));            
+            PrefabReference yardPrefab = _yard.CreateComponent<PrefabReference>();
+            yardPrefab.SetPrefab(Context.ResourceCache.GetResource<PrefabResource>("Models/scrapyard/junkdisplay.FBX.d/Prefab.prefab"));
+
+            Node plane = yardPrefab.Node.FindChild("Plane001");
+            plane.CreateComponent<RigidBody>().Friction = 1.0f;
+            CollisionShape planeShape = plane.CreateComponent<CollisionShape>();
+            StaticModel planeModel = plane.GetComponent<StaticModel>();
+            planeShape.SetConvexHull(planeModel.GetModel());
 
             var nodeList = _scene.Ptr.GetChildrenWithComponent(nameof(KinematicCharacterController), true);
             foreach (var node in nodeList)
@@ -69,11 +75,10 @@ namespace CharacterDemo
             }
 
             _character = _scene.Ptr.CreateChild();
-            _character.Position = new Vector3(0, 0.2f);
             _character.CreateComponent<PrefabReference>()
                 .SetPrefab(Context.ResourceCache.GetResource<PrefabResource>("Models/Characters/YBot/YBot.prefab"));
             
-            _character.Position = new Vector3(10, 0.2f, -1);
+            _character.Position = new Vector3(1, 1, 10);
 
             var character = SetupCharacter(_character);
             _player = _character.CreateComponent<Player>();
