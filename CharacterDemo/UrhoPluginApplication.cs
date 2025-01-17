@@ -11,6 +11,16 @@ namespace CharacterDemo
     public partial class UrhoPluginApplication : PluginApplication
     {
         /// <summary>
+        ///     Safe pointer to game screen.
+        /// </summary>
+        private SharedPtr<GameState> _gameState;
+
+        /// <summary>
+        /// Inventory application state.
+        /// </summary>
+        //////////private SharedPtr<InventoryState> _inventoryState;
+
+        /// <summary>
         ///     Safe pointer to menu screen.
         /// </summary>
         private SharedPtr<MainMenuState> _mainMenuState;
@@ -40,7 +50,12 @@ namespace CharacterDemo
         /// <summary>
         ///     Gets a value indicating whether the game is running.
         /// </summary>
-        public bool IsGameRunning => false;
+        public bool IsGameRunning => _gameState;
+
+        /// <summary>
+        /// Current game state or null if no game is running.
+        /// </summary>
+        public GameState Game => _gameState.Ptr;
 
         protected override void Load()
         {
@@ -99,6 +114,8 @@ namespace CharacterDemo
         protected override void Stop()
         {
             _mainMenuState?.Dispose();
+            _gameState?.Dispose();
+            ///////_inventoryState?.Dispose();
 
             base.Stop();
         }
@@ -117,7 +134,9 @@ namespace CharacterDemo
         /// </summary>
         public void ToNewGame()
         {
-            // TODO: Transition to new game.
+            _gameState?.Dispose();
+            _gameState = new GameState(this);
+            _stateStack.Push(_gameState);
         }
 
         /// <summary>
@@ -125,7 +144,7 @@ namespace CharacterDemo
         /// </summary>
         public void ContinueGame()
         {
-            // TODO: Transition to existing game state.
+            if (_gameState) _stateStack.Push(_gameState);
         }
 
         public void Quit()
@@ -159,5 +178,12 @@ namespace CharacterDemo
             _settings?.Dispose();
             _settings = ConfigFileContainer<GameSettings>.LoadConfig(Context);
         }
+        /*
+        public void OpenInventory()
+        {
+            _inventoryState = _inventoryState ?? new SharedPtr<InventoryState>(new InventoryState(this));
+            _stateStack.Push(_inventoryState);
+        }
+        */
     }
 }

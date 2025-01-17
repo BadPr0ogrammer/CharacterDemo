@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using Urho3DNet;
 
@@ -7,6 +8,7 @@ namespace CharacterDemo
     /// <summary>
     ///     This class represents an Urho3D application.
     /// </summary>
+
     [Preserve(AllMembers = true)]
     public partial class UrhoApplication : Application
     {
@@ -19,6 +21,8 @@ namespace CharacterDemo
         public UrhoApplication(Context context) : base(context)
         {
         }
+
+
 
         /// <summary>
         ///     Setup application.
@@ -58,19 +62,19 @@ namespace CharacterDemo
                         case "--opengl": EngineParameters[Urho3D.EpRenderBackend] = (int)RenderBackend.OpenGl; break;
                         case "--vulkan": EngineParameters[Urho3D.EpRenderBackend] = (int)RenderBackend.Vulkan; break;
                         case "--fullscreen":
-                            {
-                                EngineParameters[Urho3D.EpFullScreen] = true;
-                                EngineParameters[Urho3D.EpWindowResizable] = false;
-                                EngineParameters[Urho3D.EpBorderless] = true;
-                                break;
-                            }
+                        {
+                            EngineParameters[Urho3D.EpFullScreen] = true;
+                            EngineParameters[Urho3D.EpWindowResizable] = false;
+                            EngineParameters[Urho3D.EpBorderless] = true;
+                            break;
+                        }
                         case "--windowed":
-                            {
-                                EngineParameters[Urho3D.EpFullScreen] = false;
-                                EngineParameters[Urho3D.EpWindowResizable] = true;
-                                EngineParameters[Urho3D.EpBorderless] = false;
-                                break;
-                            }
+                        {
+                            EngineParameters[Urho3D.EpFullScreen] = false;
+                            EngineParameters[Urho3D.EpWindowResizable] = true;
+                            EngineParameters[Urho3D.EpBorderless] = false;
+                            break;
+                        }
                         default: Log.Warning("Unknown argument " + commandLineArgs[index]); break;
                     }
                 }
@@ -89,8 +93,9 @@ namespace CharacterDemo
             // Subscribe for log messages.
             SubscribeToEvent(E.LogMessage, OnLogMessage);
 
-            // Limit frame rate tp 60 FPS to save battery time on mobile devices.
+            // Limit frame rate tp 60 FPS as a workaround for kinematic character controller movement.
             Context.Engine.MaxFps = 60;
+
 
 
             _pluginApplication = new UrhoPluginApplication(Context);
